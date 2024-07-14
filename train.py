@@ -29,6 +29,8 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 
+import communication as comm
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -72,6 +74,8 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+# simulated allgather drops
+drop_prob = 0.0
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -252,6 +256,12 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+
+# TODO(ngiladi): create current and previous states
+current_state = raw_model.state_dict()
+previous_state = raw_model.state_dict()
+comm.update_previous_state(current_state, previous_state)
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -287,6 +297,9 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
+    # TODO(ngiladi): sample model from current and previous version.
+    comm.sample_from_models(raw_model, current_state, previous_state, drop_prob)
+
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
@@ -307,6 +320,10 @@ while True:
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+    # TODO(ngiladi): update current and previous model states
+    comm.update_previous_state(current_state, previous_state)
+
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
