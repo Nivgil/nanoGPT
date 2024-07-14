@@ -31,6 +31,14 @@ from model import GPTConfig, GPT
 
 import communication as comm
 
+try:
+    import habana_frameworks.torch.core as htcore
+    import habana_frameworks.torch.hpu as hthpu
+    import habana_frameworks.torch.gpu_migration
+except:
+    htcore = None
+    hthpu = None
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -69,9 +77,10 @@ warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
-backend = 'nccl' # 'nccl', 'gloo', etc.
+backend = 'hccl' if hthpu and hthpu.is_available() else 'nccl' # 'nccl', 'gloo', etc.
 # system
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+device = 'hpu' if hthpu and hthpu.is_available() else 'cuda'
+# device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # simulated allgather drops
@@ -316,6 +325,8 @@ while True:
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
+        if hthpu and hthpu.is_available():
+            htcore.mark_step()
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -329,6 +340,8 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+    if hthpu and hthpu.is_available():
+        htcore.mark_step()
 
     # timing and logging
     t1 = time.time()
