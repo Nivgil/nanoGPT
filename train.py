@@ -27,7 +27,7 @@ import torch
 try:
     import habana_frameworks.torch.core as htcore
     import habana_frameworks.torch.hpu as hthpu
-    import habana_frameworks.torch.gpu_migration
+    # import habana_frameworks.torch.gpu_migration
 except:
     htcore = None
     hthpu = None
