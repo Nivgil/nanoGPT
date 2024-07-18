@@ -76,6 +76,8 @@ dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # simulated allgather drops
 drop_prob = 0.0
+sim_world_size = 8
+
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -257,10 +259,17 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
-# TODO(ngiladi): create current and previous states
-current_state = raw_model.state_dict()
-previous_state = raw_model.state_dict()
-comm.update_previous_state(current_state, previous_state)
+local_sim_world_size = sim_world_size // ddp_world_size
+if gradient_accumulation_steps % local_sim_world_size > 0:
+    raise ValueError(
+        f'accumulation steps ({gradient_accumulation_steps}) is not dividable '
+        f'by local world size {local_sim_world_size}, and cause wrong behaviour'
+    )
+print(f'local simulated world size - {local_sim_world_size}')
+local_world_states = {}
+for worker in range(local_sim_world_size):
+    local_world_states[worker] = comm.get_model_snapshot(raw_model)
+latest_state = comm.get_model_snapshot(raw_model)
 
 while True:
 
@@ -297,12 +306,18 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
-    # TODO(ngiladi): sample model from current and previous version.
-    comm.sample_from_models(raw_model, current_state, previous_state, drop_prob)
-
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
+        if micro_step % local_sim_world_size == 0:
+            sim_rank = (micro_step // local_sim_world_size) % local_sim_world_size
+            # load local previous model of nth worker
+            previous_state = local_world_states[sim_rank]
+            # sample model for new worker from latest (global) & prev (local)
+            comm.sample_from_models(raw_model, latest_state, previous_state,
+                                    drop_prob)
+            # update worker state from current sample
+            local_world_states[sim_rank] = comm.get_model_snapshot(raw_model)
         if ddp:
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
@@ -321,14 +336,16 @@ while True:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-    # TODO(ngiladi): update current and previous model states
-    comm.update_previous_state(current_state, previous_state)
+    # update based on latest state
+    raw_model.load_state_dict(latest_state)
 
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+
+    latest_state = comm.get_model_snapshot(raw_model)
 
     # timing and logging
     t1 = time.time()
