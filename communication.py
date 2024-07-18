@@ -1,6 +1,14 @@
 import torch
 
 
+def get_model_snapshot(model: torch.nn.Module) -> dict:
+    """Returns a cloned detached model state dict."""
+    state_dict = {}
+    for key, weights in model.state_dict().items():
+        state_dict[key] = weights.clone().detach()
+    return state_dict
+
+
 def update_previous_state(current_state: dict, previous_state: dict) -> None:
     """Updates previous state to current state."""
     for (key_1, weights_1), key_2 in zip(current_state.items(),
