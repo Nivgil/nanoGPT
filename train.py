@@ -27,7 +27,6 @@ import torch
 try:
     import habana_frameworks.torch.core as htcore
     import habana_frameworks.torch.hpu as hthpu
-    # import habana_frameworks.torch.gpu_migration
 except:
     htcore = None
     hthpu = None
@@ -80,9 +79,8 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 backend = 'hccl' if hthpu and hthpu.is_available() else 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'hpu' if hthpu and hthpu.is_available() else 'cuda'
-# device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' # if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = False  # use PyTorch 2.0 to compile the model to be faster
+compile = False if hthpu and hthpu.is_available() else True # use PyTorch 2.0 to compile the model to be faster
 # simulated allgather drops
 drop_prob = 0.0
 sim_world_size = 8
@@ -100,8 +98,9 @@ if ddp:
     ddp_rank = int(os.environ['RANK'])
     ddp_local_rank = int(os.environ['LOCAL_RANK'])
     ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = 'hpu' # f'cuda:{ddp_local_rank}'
-    #torch.cuda.set_device(device)
+    device = 'hpu' if hthpu and hthpu.is_available() else f'cuda:{ddp_local_rank}'
+    if torch.cuda.is_available():
+        torch.cuda.set_device(device)
     master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
     seed_offset = ddp_rank # each process gets a different seed
     # world_size number of processes will be training simultaneously, so we can scale
@@ -119,8 +118,9 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
-# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'hpu' # for later use in torch.autocast
 # note: float16 data type will automatically use a GradScaler
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
@@ -208,7 +208,8 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=False) # (dtype == 'float16'))
+enabled = (dtype == 'float16') if torch.cuda.is_available() else False
+scaler = torch.cuda.amp.GradScaler(enabled=enabled)
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -224,7 +225,8 @@ if compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[0])
+    rank = ddp_local_rank if torch.cuda.is_available() else 0
+    model = DDP(model, device_ids=[rank])
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
