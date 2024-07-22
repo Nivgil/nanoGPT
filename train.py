@@ -282,6 +282,8 @@ for worker in range(local_sim_world_size):
     local_world_states[worker] = comm.get_model_snapshot(raw_model)
 latest_state = comm.get_model_snapshot(raw_model)
 
+grad_norm = 0
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -299,6 +301,7 @@ while True:
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
+                "grad_norm": grad_norm,
                 "mfu": running_mfu*100, # convert to percentage
             })
         if losses['val'] < best_val_loss or always_save_checkpoint:
@@ -347,7 +350,7 @@ while True:
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
     # update based on latest state
     raw_model.load_state_dict(latest_state)
