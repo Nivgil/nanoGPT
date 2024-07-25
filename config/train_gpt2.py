@@ -32,7 +32,7 @@ weight_decay = 1e-1
 drop_prob = 0.0
 
 # simulated number of workers
-sim_world_size = 32
+sim_world_size = 64
 
 # output directory
 timestamp = datetime.datetime.now().strftime("%d-%m-%y_%H-%M")
