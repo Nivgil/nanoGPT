@@ -20,6 +20,7 @@ import os
 import time
 import math
 import pickle
+import datetime
 from contextlib import nullcontext
 
 import numpy as np
@@ -41,7 +42,7 @@ import communication as comm
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
-out_dir = 'out'
+out_dir = 'out' + datetime.datetime.now().strftime("%d-%m-%y_%H-%M")
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
