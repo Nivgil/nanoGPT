@@ -2,6 +2,8 @@
 # launch as the following (e.g. in a screen session) and wait ~5 days:
 # $ torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
 
+import datetime
+
 wandb_log = True
 wandb_project = 'owt'
 wandb_run_name='gpt2-124M'
@@ -31,3 +33,8 @@ drop_prob = 0.0
 
 # simulated number of workers
 sim_world_size = 32
+
+# output directory
+timestamp = datetime.datetime.now().strftime("%d-%m-%y_%H-%M")
+drop_str = str(drop_prob).replace(".", "_")
+out_dir = f'/software/users/ngiladi/nanoGPT/runs/n-{sim_world_size}_{timestamp}_drop-{drop_str}'
