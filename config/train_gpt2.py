@@ -13,12 +13,12 @@ wandb_run_name='gpt2-124M'
 # 8 batch size * 1024 block size * 8 gradaccum * 8 GPUs = 524,288
 batch_size = 8
 block_size = 1024
-gradient_accumulation_steps = 16 * 8
+gradient_accumulation_steps = 8 * 8
 
 # this (600_000) makes total number of tokens be 300B
 # this (200_000) makes total number of tokens be 100B
-max_iters = 100_000
-lr_decay_iters = 100_000
+max_iters = 200_000
+lr_decay_iters = 200_000
 
 # eval stuff
 eval_interval = 1000
@@ -32,7 +32,7 @@ weight_decay = 1e-1
 drop_prob = 0.0
 
 # simulated number of workers
-sim_world_size = 128
+sim_world_size = 64
 
 # output directory
 timestamp = datetime.datetime.now().strftime("%d-%m-%y_%H-%M")
