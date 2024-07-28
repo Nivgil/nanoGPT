@@ -278,13 +278,15 @@ if gradient_accumulation_steps % local_sim_world_size > 0:
         f'accumulation steps ({gradient_accumulation_steps}) is not dividable '
         f'by local world size {local_sim_world_size}, and cause wrong behaviour'
     )
-print(f'local simulated world size - {local_sim_world_size}')
+if ddp_rank == 0:
+    print(f'local simulated world size - {local_sim_world_size}')
 local_world_states = {}
 for worker in range(local_sim_world_size):
     local_world_states[worker] = comm.get_model_snapshot(raw_model)
 latest_state = comm.get_model_snapshot(raw_model)
 
 grad_norm = 0
+sample_state_freq = gradient_accumulation_steps // local_sim_world_size
 
 while True:
 
@@ -325,8 +327,8 @@ while True:
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
-        if micro_step % local_sim_world_size == 0:
-            sim_rank = (micro_step // local_sim_world_size) % local_sim_world_size
+        if micro_step % sample_state_freq == 0:
+            sim_rank = (micro_step // sample_state_freq) % local_sim_world_size
             # load local previous model of nth worker
             previous_state = local_world_states[sim_rank]
             # sample model for new worker from latest (global) & prev (local)
