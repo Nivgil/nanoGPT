@@ -323,7 +323,15 @@ while True:
                     'config': config,
                 }
                 print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                torch.save(checkpoint, os.path.join(out_dir,
+                                                    f'ckpt_{iter_num}.pt'))
+                checkpoints = sorted(
+                    [f for f in os.listdir(out_dir) if f.startswith('ckpt_')],
+                    key=lambda x: int(x.split('_')[-1].split('.')[0])
+                )
+                while len(checkpoints) > 1:
+                    oldest_checkpoint = checkpoints.pop(0)
+                    os.remove(os.path.join(out_dir, oldest_checkpoint))
     if iter_num == 0 and eval_only:
         break
 
