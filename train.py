@@ -266,7 +266,7 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, dir=out_dir,
                config=config)
     with open(os.path.join(out_dir, 'config.json'), 'w') as f:
-        json.dumps(config, f, indent=4)
+        f.write(json.dumps(config, indent=4))
 
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
