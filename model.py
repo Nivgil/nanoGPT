@@ -283,10 +283,9 @@ class GPT(nn.Module):
     def init_from(cls, init_from, out_dir=None, device=None):
         if init_from == 'resume':
             # init from a model saved in a specific directory
-            checkpoints = [x for x in os.listdir(out_dir) if x.startswith('ckpt')]
             checkpoints = sorted(
-                checkpoints,
-                key=lambda x: int(x.split('_')[-1].split['.'][0])
+                [f for f in os.listdir(out_dir) if f.startswith('ckpt_')],
+                key=lambda x: int(x.split('_')[-1].split('.')[0])
             )
             ckpt_path = os.path.join(out_dir, checkpoints[-1])
             print(f'Loading checkpoint {ckpt_path}')
