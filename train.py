@@ -86,6 +86,7 @@ compile = False if hthpu and hthpu.is_available() else True # use PyTorch 2.0 to
 # simulated allgather drops
 drop_prob = 0.0
 sim_world_size = 8
+sampling_method = 'structured_uniform'
 
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -116,6 +117,9 @@ else:
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
+
+# init sampling method function
+masking_func = comm.get_masking_func(sampling_method, drop_prob, sim_world_size)
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -344,7 +348,8 @@ while True:
             previous_state = local_world_states[sim_rank]
             # sample model for new worker from latest (global) & prev (local)
             comm.sample_from_models(raw_model, latest_state, previous_state,
-                                    drop_prob)
+                                    masking_func,
+                                    ddp_rank * local_sim_world_size + sim_rank)
             # update worker state from current sample
             local_world_states[sim_rank] = comm.get_model_snapshot(raw_model)
         if ddp:

@@ -28,6 +28,7 @@ weight_decay = 1e-1
 
 # simulated all-gather drops
 drop_prob = 0.0
+sampling_method = 'structured_uniform'
 
 # simulated number of workers
 sim_world_size = 128
