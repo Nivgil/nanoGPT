@@ -15,7 +15,7 @@ gradient_accumulation_steps = 8 * 8
 # this (600_000) makes total number of tokens be 300B
 # this (200_000) makes total number of tokens be 100B
 # this (100_000) makes total number of tokens be 100B
-max_iters = 200_000
+max_iters = 20
 lr_decay_iters = 200_000
 
 # eval stuff

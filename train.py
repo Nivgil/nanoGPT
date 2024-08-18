@@ -94,6 +94,10 @@ exec(open('configurator.py').read()) # overrides from command line or config fil
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
+# profilier
+activities = [torch.profiler.ProfilerActivity.CPU]
+activities.append(torch.profiler.ProfilerActivity.HPU)
+
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 if ddp:
@@ -295,114 +299,121 @@ latest_state = comm.get_model_snapshot(raw_model)
 grad_norm = 0
 sample_state_freq = gradient_accumulation_steps // local_sim_world_size
 
-while True:
+with torch.profiler.profile(
+    schedule=torch.profiler.schedule(wait=0, warmup=20, active=5, repeat=1),
+    activities=activities,
+    on_trace_ready=torch.profiler.tensorboard_trace_handler('logs')) as prof:
 
-    # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    while True:
+        # determine and set the learning rate for this iteration
+        lr = get_lr(iter_num) if decay_lr else learning_rate
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
 
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        if wandb_log:
-            wandb.log({
-                "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "lr": lr,
-                "grad_norm": grad_norm,
-                "mfu": running_mfu*100, # convert to percentage
-            })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir,
-                                                    f'ckpt_{iter_num}.pt'))
-                checkpoints = sorted(
-                    [f for f in os.listdir(out_dir) if f.startswith('ckpt_')],
-                    key=lambda x: int(x.split('_')[-1].split('.')[0])
-                )
-                while len(checkpoints) > 1:
-                    oldest_checkpoint = checkpoints.pop(0)
-                    os.remove(os.path.join(out_dir, oldest_checkpoint))
-    if iter_num == 0 and eval_only:
-        break
+        # evaluate the loss on train/val sets and write checkpoints
+        if iter_num % eval_interval == 0 and master_process:
+            losses = estimate_loss()
+            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            if wandb_log:
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "lr": lr,
+                    "grad_norm": grad_norm,
+                    "mfu": running_mfu*100, # convert to percentage
+                })
+            if losses['val'] < best_val_loss or always_save_checkpoint:
+                best_val_loss = losses['val']
+                if iter_num > 0:
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'model_args': model_args,
+                        'iter_num': iter_num,
+                        'best_val_loss': best_val_loss,
+                        'config': config,
+                    }
+                    print(f"saving checkpoint to {out_dir}")
+                    torch.save(checkpoint, os.path.join(out_dir,
+                                                        f'ckpt_{iter_num}.pt'))
+                    checkpoints = sorted(
+                        [f for f in os.listdir(out_dir) if f.startswith('ckpt_')],
+                        key=lambda x: int(x.split('_')[-1].split('.')[0])
+                    )
+                    while len(checkpoints) > 1:
+                        oldest_checkpoint = checkpoints.pop(0)
+                        os.remove(os.path.join(out_dir, oldest_checkpoint))
+        if iter_num == 0 and eval_only:
+            break
 
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        if micro_step % sample_state_freq == 0:
-            sim_rank = (micro_step // sample_state_freq) % local_sim_world_size
-            # load local previous model of nth worker
-            previous_state = local_world_states[sim_rank]
-            # sample model for new worker from latest (global) & prev (local)
-            comm.sample_from_models(raw_model, latest_state, previous_state,
-                                    masking_func,
-                                    ddp_rank * local_sim_world_size + sim_rank)
-            # update worker state from current sample
-            local_world_states[sim_rank] = comm.get_model_snapshot(raw_model)
-        if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+        # forward backward update, with optional gradient accumulation to simulate larger batch size
+        # and using the GradScaler if data type is float16
+        for micro_step in range(gradient_accumulation_steps):
+            if micro_step % sample_state_freq == 0:
+                sim_rank = (micro_step // sample_state_freq) % local_sim_world_size
+                # load local previous model of nth worker
+                # previous_state = local_world_states[sim_rank]
+                # sample model for new worker from latest (global) & prev (local)
+                # comm.sample_from_models(raw_model, latest_state, previous_state,
+                #                         masking_func,
+                #                         ddp_rank * local_sim_world_size + sim_rank)
+                # update worker state from current sample
+                # local_world_states[sim_rank] = comm.get_model_snapshot(raw_model)
+            if ddp:
+                # in DDP training we only need to sync gradients at the last micro step.
+                # the official way to do this is with model.no_sync() context manager, but
+                # I really dislike that this bloats the code and forces us to repeat code
+                # looking at the source of that context manager, it just toggles this variable
+                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            with ctx:
+                logits, loss = model(X, Y)
+                loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            # immediately async prefetch next batch while model is doing the forward pass on the GPU
+            X, Y = get_batch('train')
+            # backward pass, with gradient scaling if training in fp16
+            scaler.scale(loss).backward()
+            if hthpu and hthpu.is_available():
+                htcore.mark_step()
+        # clip the gradient
+        if grad_clip != 0.0:
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+        # update based on latest state
+        # raw_model.load_state_dict(latest_state)
+
+        # step the optimizer and scaler if training in fp16
+        scaler.step(optimizer)
+        scaler.update()
+        # flush the gradients as soon as we can, no need for this memory anymore
+        optimizer.zero_grad(set_to_none=True)
         if hthpu and hthpu.is_available():
             htcore.mark_step()
-    # clip the gradient
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        prof.step()
 
-    # update based on latest state
-    raw_model.load_state_dict(latest_state)
+        # latest_state = comm.get_model_snapshot(raw_model)
 
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
-    if hthpu and hthpu.is_available():
-        htcore.mark_step()
+        # timing and logging
+        t1 = time.time()
+        dt = t1 - t0
+        t0 = t1
+        if iter_num % log_interval == 0 and master_process:
+            # get loss as float. note: this is a CPU-GPU sync point
+            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+            lossf = loss.item() * gradient_accumulation_steps
+            if local_iter_num >= 5: # let the training loop settle a bit
+                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        iter_num += 1
+        local_iter_num += 1
 
-    latest_state = comm.get_model_snapshot(raw_model)
+        # termination conditions
+        if iter_num > max_iters:
+            break
 
-    # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
-    if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-            running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-    iter_num += 1
-    local_iter_num += 1
-
-    # termination conditions
-    if iter_num > max_iters:
-        break
+prof.export_chrome_trace(os.path.join(out_dir, 'trace.json'))
 
 if ddp:
     destroy_process_group()
