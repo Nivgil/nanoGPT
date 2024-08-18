@@ -300,9 +300,8 @@ grad_norm = 0
 sample_state_freq = gradient_accumulation_steps // local_sim_world_size
 
 with torch.profiler.profile(
-    schedule=torch.profiler.schedule(wait=0, warmup=20, active=5, repeat=1),
-    activities=activities,
-    on_trace_ready=torch.profiler.tensorboard_trace_handler('logs')) as prof:
+    schedule=torch.profiler.schedule(skip_first=50*8, wait=0, warmup=10*8, active=16, repeat=1),
+    activities=activities) as prof:
 
     while True:
         # determine and set the learning rate for this iteration
@@ -413,7 +412,8 @@ with torch.profiler.profile(
         if iter_num > max_iters:
             break
 
-prof.export_chrome_trace(os.path.join(out_dir, 'trace.json'))
+if master_process:
+    prof.export_chrome_trace(os.path.join(out_dir, 'trace.json'))
 
 if ddp:
     destroy_process_group()
