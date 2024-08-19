@@ -26,6 +26,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+import torch.distributed as dist
 try:
     import habana_frameworks.torch.core as htcore
     import habana_frameworks.torch.hpu as hthpu
@@ -264,6 +265,13 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
+
+def average_gradients(nn_model: torch.nn.Module):
+    for param in nn_model.parameters():
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        param.grad.data /= ddp_world_size
+
+
 # logging
 if wandb_log and master_process:
     import wandb
@@ -357,7 +365,8 @@ while True:
             # the official way to do this is with model.no_sync() context manager, but
             # I really dislike that this bloats the code and forces us to repeat code
             # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            model.require_backward_grad_sync = False
+            require_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
@@ -365,6 +374,8 @@ while True:
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
+        if require_grad_sync:
+            average_gradients(model)
         if hthpu and hthpu.is_available():
             htcore.mark_step()
     # clip the gradient
