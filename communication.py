@@ -1,5 +1,7 @@
-import torch
 from typing import Callable
+
+import torch
+import torch.distributed as dist
 
 
 def get_model_snapshot(model: torch.nn.Module) -> dict:
@@ -67,3 +69,9 @@ def get_masking_func(
         'uniform': uniform_masking,
         'structured_uniform': uniform_structred_masking
     }[masking_type](masking_prob, num_workers)
+
+
+def average_gradients(nn_model: torch.nn.Module):
+    for param in nn_model.parameters():
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        param.grad.data /= dist.get_world_size()

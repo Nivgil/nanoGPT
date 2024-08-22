@@ -266,12 +266,6 @@ def get_lr(it):
     return min_lr + coeff * (learning_rate - min_lr)
 
 
-def average_gradients(nn_model: torch.nn.Module):
-    for param in nn_model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        param.grad.data /= ddp_world_size
-
-
 # logging
 if wandb_log and master_process:
     import wandb
@@ -375,7 +369,7 @@ while True:
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
         if require_grad_sync:
-            average_gradients(model)
+            comm.average_gradients(model)
         if hthpu and hthpu.is_available():
             htcore.mark_step()
     # clip the gradient
