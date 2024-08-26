@@ -81,7 +81,7 @@ def get_gradients_snapshot(model: torch.nn.Module) -> dict:
     """Returns copy of gradient state of nn_model."""
     state_dict = {}
     for key, weight in model.state_dict().items():
-        state_dict[key] = weight.grad.clone().detach()
+        state_dict[key] = weight.grad.clone().detach() if weight.grad else None
     return state_dict
 
 
