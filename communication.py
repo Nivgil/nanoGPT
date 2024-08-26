@@ -71,7 +71,25 @@ def get_masking_func(
     }[masking_type](masking_prob, num_workers)
 
 
-def average_gradients(nn_model: torch.nn.Module):
-    for param in nn_model.parameters():
+def average_gradients(model: torch.nn.Module):
+    for param in model.parameters():
         dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
         param.grad.data /= dist.get_world_size()
+
+
+def get_gradients_snapshot(model: torch.nn.Module) -> dict:
+    """Returns copy of gradient state of nn_model."""
+    state_dict = {}
+    for key, weight in model.state_dict().items():
+        state_dict[key] = weight.grad.clone().detach()
+    return state_dict
+
+
+def mask_gradients(
+        model: torch.nn.Module, gradient_buffer: dict,
+        mask_func: Callable[[torch.Tensor], torch.Tensor], sim_rank: int):
+    for key, weights in model.named_parameters():
+        mask = torch.rand(weights.shape, device=weights.device)
+        mask = mask_func(mask, sim_rank=sim_rank)
+        sample = torch.where(mask, weights.grad, gradient_buffer[key])
+        weights.grad = sample

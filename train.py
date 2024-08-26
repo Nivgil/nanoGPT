@@ -295,7 +295,7 @@ for worker in range(local_sim_world_size):
 latest_state = comm.get_model_snapshot(raw_model)
 
 grad_norm = 0
-sample_state_freq = gradient_accumulation_steps // local_sim_world_size
+local_sim_grad_accumulations = gradient_accumulation_steps // local_sim_world_size
 
 while True:
 
@@ -344,8 +344,8 @@ while True:
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
-        if micro_step % sample_state_freq == 0:
-            sim_rank = (micro_step // sample_state_freq) % local_sim_world_size
+        if micro_step % local_sim_grad_accumulations == 0:
+            sim_rank = (micro_step // local_sim_grad_accumulations) % local_sim_world_size
             # load local previous model of nth worker
             previous_state = local_world_states[sim_rank]
             # sample model for new worker from latest (global) & prev (local)
@@ -354,6 +354,7 @@ while True:
                                     ddp_rank * local_sim_world_size + sim_rank)
             # update worker state from current sample
             local_world_states[sim_rank] = comm.get_model_snapshot(raw_model)
+            gradient_buffer = comm.get_gradients_snapshot(raw_model)
         if ddp:
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
@@ -368,6 +369,10 @@ while True:
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
+        if (micro_step + 1) % local_sim_grad_accumulations == 0:
+            comm.mask_gradients(
+                raw_model, gradient_buffer,
+                masking_func, ddp_rank * local_sim_world_size + sim_rank)
         if require_grad_sync:
             comm.average_gradients(model)
         if hthpu and hthpu.is_available():
