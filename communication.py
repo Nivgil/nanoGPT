@@ -91,5 +91,6 @@ def mask_gradients(
     for key, weights in model.named_parameters():
         mask = torch.rand(weights.shape, device=weights.device)
         mask = mask_func(mask, sim_rank=sim_rank)
-        sample = torch.where(mask, weights.grad, gradient_buffer[key])
+        gradient = gradient_buffer[key] if gradient_buffer[key] else torch.zeros_like(weights.grad)
+        sample = torch.where(mask, weights.grad, gradient)
         weights.grad = sample
