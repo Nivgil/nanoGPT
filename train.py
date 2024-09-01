@@ -374,7 +374,7 @@ while True:
                 raw_model, gradient_buffer,
                 masking_func, ddp_rank * local_sim_world_size + sim_rank)
         if require_grad_sync:
-            comm.average_gradients(model)
+            comm.average_gradients(model, drop_prob)
         if hthpu and hthpu.is_available():
             htcore.mark_step()
     # clip the gradient

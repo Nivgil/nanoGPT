@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 import torch.distributed as dist
@@ -71,10 +71,11 @@ def get_masking_func(
     }[masking_type](masking_prob, num_workers)
 
 
-def average_gradients(model: torch.nn.Module):
+def average_gradients(model: torch.nn.Module, drop_rate: float):
+    norm_factor = dist.get_world_size() * (1 - drop_rate)
     for param in model.parameters():
         dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        param.grad.data /= dist.get_world_size()
+        param.grad.data /= norm_factor
 
 
 def get_gradients_snapshot(model: torch.nn.Module) -> dict:
