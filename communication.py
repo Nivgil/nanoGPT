@@ -81,8 +81,8 @@ def average_gradients(model: torch.nn.Module, drop_rate: float):
 def get_gradients_snapshot(model: torch.nn.Module) -> dict:
     """Returns copy of gradient state of nn_model."""
     state_dict = {}
-    for key, weight in model.state_dict().items():
-        state_dict[key] = weight.grad.clone().detach() if weight.grad else None
+    for key, weight in model.named_parameters():
+        state_dict[key] = weight.grad.clone().detach() if weight.grad is not None else None
     return state_dict
 
 
@@ -92,6 +92,6 @@ def mask_gradients(
     for key, weights in model.named_parameters():
         mask = torch.rand(weights.shape, device=weights.device)
         mask = mask_func(mask, sim_rank=sim_rank)
-        gradient = gradient_buffer[key] if gradient_buffer[key] else torch.zeros_like(weights.grad)
+        gradient = gradient_buffer[key] if gradient_buffer[key] is not None else torch.zeros_like(weights.grad)
         sample = torch.where(mask, weights.grad, gradient)
         weights.grad = sample
